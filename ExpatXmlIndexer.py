@@ -8,6 +8,38 @@ elif int(version[0]) == 2:
     _bytes_to_string = lambda b: b # bytes to string, i.e. do nothing
     _string_to_bytes = _bytes_to_string
 
+def xml_index_iter(filename, targetfield, tagstoparse=None, returndict=True):
+    """A xml file iter that returns indexes for sequential tags
+
+    targetfield is a text field that defines the tag over which this
+    function iterates. All targetfield tags must be sequential and any
+    tag that interupts a set of targetfield tags will result in the end
+    of iteration.
+
+    tagstoparse 
+    """
+    if not hasattr(filename, "read"):
+        handle = open(filename, 'rb')
+    else:
+        handle = filename
+
+    if tagstoparse is None:
+        tagstoparse = []
+    if targetfield not in tagstoparse:
+        tagstoparse.append(targetfield)
+
+    position = 0
+    handler = ExpatHandler(handle, targetfield, tagstoparse)
+    while True:
+        root = handler.parse_from_position(position)
+        if returndict:
+            yield root.first_child().flatten_to_dict()
+        else:
+            yield root.first_child()
+        if root.lastrecord is True:
+            break
+        position = root.nextelementoffset
+
 
 class LinkedElement(object):
     """A simple to use LinkedElement class for indexing
@@ -30,6 +62,10 @@ class LinkedElement(object):
         self.children = []
         self.indexbegin = begin
         self.indexend = end
+
+        #used for looking at next element
+        self.lastrecord = True
+        self.nextelementoffset = None
 
     def append(self, child):
         child.parent = self
@@ -66,6 +102,15 @@ class LinkedElement(object):
         if hasattr(segment, "decode"):
             segment = _bytes_to_string(segment)
         return segment
+
+    def flatten_to_dict(self):
+        asdict = {"tag":self.tag,
+           "text":self.text,
+           "attributes":self.attributes,
+           "children":[child.flatten_to_dict() for child in self.children],
+           "file_offset_begin":self.indexbegin,
+           "file_offset_length":(self.indexend - self.indexbegin)}
+        return asdict
 
 class ExpatHandler(object):
     """ExpatHandler class will return an indexed LinkedElement tree
@@ -109,46 +154,49 @@ class ExpatHandler(object):
         try:
             parser.ParseFile(handle)
         except StopIteration:
-            # fix index for end-tags that contain spaces
-            handle.seek(self.rootelem.indexend)
-            endregion = _bytes_to_string(handle.read(50))
-            padding = 0
-            for c in endregion:
-                if c == "<":
-                    break
-                padding += 1
-            self.rootelem.indexend += padding
+            pass
+        # fix index for end-tags and next file begin
+        handle.seek(self.rootelem.indexend)
+        readlen = 100
+        padding = 0
+        endfound = False
+        given_end = self.rootelem.indexend
+        c = None
+        while True:
+            if not c:
+                endregion = _bytes_to_string(handle.read(readlen))
+                if not endregion or len(endregion) == 0:
+                    raise ValueError( \
+                        "file does not contain end tag on/after line {}"\
+                        .format(parser.CurrentLineNumber))
+                c = endregion[padding%readlen]
+            if c == "<":
+                next = given_end + padding
+                self.rootelem.nextelementoffset = next
+                if not endfound:
+                    raise ValueError( \
+                        "file does not contain end tag on/after line {}"\
+                        .format(parser.CurrentLineNumber))
+                break
+            padding += 1
+            if c == ">":
+                self.rootelem.indexend = given_end + padding
+                endfound = True
+
+            c = endregion[padding%readlen]
+
+        #check the next tag
+        handle.seek(self.rootelem.nextelementoffset+1)
+        beginregion = _bytes_to_string(handle.read(len(self.targetfield)))
+        if self.targetfield == beginregion:
+            self.rootelem.lastrecord = False
+
 
         if len(rootelem.children) == 0:
             raise ValueError("The XML @ offset={} did not contain a '{}' tag".\
                               format(position, self.targetfield))
 
-        #check if another record exists
-        parser = self._parser = self._parser_class()
-        parser.StartElementHandler = self.check_for_next_record
-        #No EndElementHandler or CharacterDataHandler needed
-        handle.seek(rootelem.indexend)
-        try:
-            parser.ParseFile(handle)
-        except StopIteration:
-            return rootelem
-        except expat.ExpatError:
-            #This is a hack; valid XML files this will produce the
-            #expected result but for files with XML errors, this
-            #may result in records that are unseen at the file's end.
-            self.rootelem.lastrecord = True
-            return rootelem
-
-        #A return should have happened at this point
-        raise ValueError("Check that file contains target LinkedElement")
-
-    def check_for_next_record(self, tag, attrs):
-        if tag == self.targetfield:
-            self.rootelem.lastrecord = False
-            raise StopIteration()
-        else:
-            self.rootelem.lastrecord = True
-            raise StopIteration()
+        return rootelem
 
     def start_element(self, tag, attrs):
         if self.currentelem.indexend is True:
@@ -161,12 +209,16 @@ class ExpatHandler(object):
             newLinkedElement.attributes = attrs
             self.currentelem.append(newLinkedElement)
             self.currentelem = newLinkedElement
+            if tag == self.targetfield:
+                self.rootelem.indexbegin = byteindex
         else:
             self.savetext = False
 
     def end_element(self, tag):
         if tag == self.targetfield:
-            end = self._parser.CurrentByteIndex + len(self.targetfield) + 3 \
+            #for a compact xml file, this will produce the index of the end
+            # tag without the trailing '>'. The parser fixes this.
+            end = self._parser.CurrentByteIndex + len(self.targetfield) + 2 \
                   + self.baseposition
             self.currentelem.indexend = end
             self.rootelem.indexend = end

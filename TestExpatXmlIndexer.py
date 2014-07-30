@@ -1,7 +1,7 @@
 import unittest
 from io import BytesIO
 
-from ExpatXmlIndexer import ExpatHandler, _string_to_bytes
+from ExpatXmlIndexer import ExpatHandler, _string_to_bytes, xml_index_iter
 
 #standard well formatted XML. Use "".join(SIMPLEXML) to
 # get the full string. recrod #1 is [1:3], record2 is [4:6]
@@ -46,15 +46,15 @@ def xml_parser_iter(ioobject, targetfield, tagstoparse):
         yield root
         if root.lastrecord is True:
             break
-        position = root.indexend
+        position = root.nextelementoffset
 
 
 class XmlIndexerTests(unittest.TestCase):
 
     xmllist = SIMPLEXML
-    ioobject = BytesIO(_string_to_bytes(''.join(xmllist)))
 
     def setUp(self):
+        self.ioobject = BytesIO(_string_to_bytes(''.join(self.xmllist)))
         targetfield = "a"
         tagstoparse = ["a", "b", "c"]
         self.resultparser = xml_parser_iter(self.ioobject, \
@@ -70,6 +70,7 @@ class XmlIndexerTests(unittest.TestCase):
     def test_each_root_contains_correct_tree(self):
         for root in self.resultparser:
             #test children of root
+
             a = root.children[0]
             rootchildrenlen = len(root.children)
             self.assertEqual(a.tag, 'a')
@@ -88,6 +89,16 @@ class XmlIndexerTests(unittest.TestCase):
             correctblen = int(b.attributes["number"])
             self.assertTrue(any(map(lambda c: c.tag == "c", ctags)))
             self.assertEqual(bchildrenlen, correctblen)
+
+    def test_root_extracts_tag(self):
+        root1 = next(self.resultparser)
+        extractedtext = repr(root1.extract_from_handle(self.ioobject))
+        knowntext = repr("".join(self.xmllist[1:3]))
+        self.assertEqual(extractedtext, knowntext)
+        root2 = next(self.resultparser)
+        extractedtext = repr(root2.extract_from_handle(self.ioobject))
+        knowntext = repr("".join(self.xmllist[4:6]))
+        self.assertEqual(extractedtext, knowntext)
 
 class XmlIndexerTestsCONDENSEDXML(XmlIndexerTests):
     xmllist = CONDENSEDXML
@@ -114,6 +125,33 @@ class UniProtXmlTest(unittest.TestCase):
             self.assertTrue(len(root.children[0].children) >= 2)
         self.assertTrue(count >= 1)
 
+class UniProtXmlByFileIterDict(unittest.TestCase):
+    filename = "Test/OSP.xml"
+
+    def setUp(self):
+        tagstoparse = ["accession", "feature"]
+        self.xmliter = xml_index_iter(self.filename, 'entry', tagstoparse)
+
+    def test_dict_output(self):
+        for entry in self.xmliter:
+            self.assertEqual(entry["tag"], "entry")
+            self.assertEqual(entry["children"][0]["tag"], "accession")
+            print(repr(entry["children"]))
+
+class UniProtXmlByFileIter(unittest.TestCase):
+    filename = "Test/OSP.xml"
+
+    def setUp(self):
+        tagstoparse = ["accession", "feature"]
+        self.xmliter = xml_index_iter(self.filename, 'entry', tagstoparse,
+                                      returndict=False)
+
+    def test_dict_output(self):
+        for entry in self.xmliter:
+            self.assertEqual(entry.tag, "entry")
+            self.assertEqual(entry.children[0].tag, "accession")
+
 if __name__ == "__main__":
+    print("about to test")
     runner = unittest.TextTestRunner(verbosity=2)
     unittest.main(testRunner=runner)
