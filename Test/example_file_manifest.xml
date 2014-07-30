@@ -1,0 +1,19 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<examplefiles>
+  <file>
+    <name>SigmodRecord.xml</name>
+    <source type="url">
+      http://www.cs.washington.edu/research/xmldatasets/www/repository.html#nasa
+    </source>
+  </file>
+  <file>
+    <name>OSP.xml</name>
+    <sourcetype="url">http://uniprot.org</source>
+  </file>
+  <file>
+    <name>simple.xml</name>
+    <source type="explaination">
+      Various sources; this is a common example from around the web.
+    </source>
+  </file>
+</examplefiles>
